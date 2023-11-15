@@ -2,8 +2,8 @@
 
 #include "dependencies.h"
 
-__global__ void k_1D_extract_histogram(unsigned char* input, int pixels);
-__global__ void k_1D_extract_histogram_shared_mem(unsigned char* input, int pixels);
+__global__ void k_1D_extract_histogram(unsigned char* input, int rows, int cols);
+__global__ void k_1D_extract_histogram_shared_mem(unsigned char* input, int rows, int cols);
 
 __global__ void k_1D_normalize_cdf_equalization(int pixels);
 __global__ void k_1D_normalize_cdf_equalization_shared_mem(int pixels);
@@ -17,8 +17,8 @@ __global__ void k_3D_extract_histogram_shared_mem(unsigned char* input, int pixe
 __global__ void k_3D_normalize_cdf_equalization(int pixels);
 __global__ void k_3D_normalize_cdf_equalization_shared_mem(int pixels);
 
-__global__ void k_3D_histogram_equalization(unsigned char* input, int pixels) ;
-__global__ void k_3D_histogram_equalization_shared_mem(unsigned char* input, int pixels);
+__global__ void k_3D_histogram_equalization(unsigned char* input, int rows, int cols) ;
+__global__ void k_3D_histogram_equalization_shared_mem(unsigned char* input, int rows, int cols);
 
 
 float histogram_equalization_gpu_1D(cv::Mat inputImg, cv::Mat* outputImg, bool sm);

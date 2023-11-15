@@ -18,6 +18,7 @@ int main()
 	/* 4,64 YAPILACAK*/
 	/*histogram hesabı local histogram*/
 	/*renkli cache yüklemeler*/
+	/*histogram 3 cache değişimi*/
 	/*gaussian denklemi*/
 	cv::utils::logging::setLogLevel(cv::utils::logging::LogLevel::LOG_LEVEL_SILENT); /*supressing annoying opencv infos in cmdline*/
 
@@ -36,11 +37,11 @@ int main()
 	cv::Mat color_gpu_img = color_img.clone();
 	cv::Mat gray_gpu_img = gray_img.clone();
 	
-	float gamma = 1.8f;
+	float gamma = 0.3;
 
 	float cpu_3d_elapsed = 0, cpu_1d_elapsed = 0, gpu_1d_elapsed = 0, gpu_1d_sm_elapsed = 0, gpu_3d_elapsed = 0, gpu_3d_sm_elapsed = 0;
 	float cpu_1d_parallel_elapsed = 0, cpu_3d_parallel_elapsed = 0;
-	int iter = 25;
+	int iter = 1;
 
 	for(int i = 0 ; i < iter ; i++){
 		// cpu_1d_elapsed += gaussian_filter_cpu_1D(gray_img, &gray_cpu_img);
@@ -52,7 +53,7 @@ int main()
 		// gpu_1d_elapsed += gaussian_filter_gpu_1D(gray_img, &gray_gpu_img, false);
 		// gpu_1d_sm_elapsed += gaussian_filter_gpu_1D(gray_img, &gray_gpu_img, true);
 
-		// gpu_3d_elapsed += gaussian_filter_gpu_3D(color_img, &color_gpu_img, false);
+		//gpu_3d_elapsed += histogram_equalization_gpu_3D(color_img, &color_gpu_img, false);
 		gpu_3d_sm_elapsed += histogram_equalization_gpu_3D(color_img, &color_gpu_img, true);
 	}
 
@@ -87,16 +88,16 @@ int main()
 	std::cout << "Acceleration of shared mem in 3d image: " << gpu_3d_elapsed / gpu_3d_sm_elapsed << "\n";
 
 	cv::imshow("img", color_img);
-	cv::imshow("img-gray", gray_img);
+	// cv::imshow("img-gray", gray_img);
 
-	cv::imshow("cpu-color", color_cpu_img);
-	cv::imshow("cpu-gray", gray_cpu_img);
+	// cv::imshow("cpu-color", color_cpu_img);
+	// cv::imshow("cpu-gray", gray_cpu_img);
 
-	cv::imshow("cpu-color-multithreaded", color_cpu_parallel_img);
-	cv::imshow("cpu-gray-multithreaded", gray_cpu_parallel_img);
+	// cv::imshow("cpu-color-multithreaded", color_cpu_parallel_img);
+	// cv::imshow("cpu-gray-multithreaded", gray_cpu_parallel_img);
 
 	cv::imshow("gpu-color", color_gpu_img);
-	cv::imshow("gpu-gray", gray_gpu_img);
+	// cv::imshow("gpu-gray", gray_gpu_img);
 
 
 	// cv::Mat equalizedOpenCV;

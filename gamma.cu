@@ -11,24 +11,22 @@ __global__ void k_init_LUT(float gamma) {
 
 __global__ void k_3D_gamma_correction(unsigned char* input, int rows, int cols) {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * 3;
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
 	
-	if (threadId >= rows * cols * 3) {
+	if (threadId >= rows * cols) {
 		return;
 	}
 	input[threadId] = LUT_device[input[threadId]];
-	input[threadId + 1] = LUT_device[input[threadId + 1]];
-	input[threadId + 2] = LUT_device[input[threadId + 2]];
 }
 
 __global__ void k_3D_gamma_correction_shared_mem(unsigned char* input, int rows, int cols) {
 	__shared__ unsigned char cache_LUT[256];
 
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * 3;
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
 
 	int threadIdInBlock = (threadIdx.x * blockDim.y) + threadIdx.y;
-	if (threadId >= rows * cols * 3) {
+	if (threadId >= rows * cols) {
 		return;
 	}
 
@@ -36,17 +34,15 @@ __global__ void k_3D_gamma_correction_shared_mem(unsigned char* input, int rows,
 		cache_LUT[threadIdInBlock] = LUT_device[threadIdInBlock];
 	}
 	__syncthreads();
-	input[threadId + 2] = cache_LUT[input[threadId + 2]];
-	input[threadId + 1] = cache_LUT[input[threadId + 1]];
 	input[threadId] = cache_LUT[input[threadId]];
 }
 
 float gamma_correction_gpu_3D(cv::Mat input_img, cv::Mat* output_img, float gamma, bool sm) {
 	unsigned char* gpu_input = NULL;
 
-	unsigned int cols = input_img.cols;
+	unsigned int cols = input_img.cols * 3;
 	unsigned int rows = input_img.rows;
-	unsigned long int size = cols * rows * sizeof(unsigned char) * 3;
+	unsigned long int size = cols * rows * sizeof(unsigned char);
 
 	unsigned char* input = input_img.data;
 	unsigned char* output = output_img->data;
@@ -56,12 +52,11 @@ float gamma_correction_gpu_3D(cv::Mat input_img, cv::Mat* output_img, float gamm
 	cudaEventCreate(&stop);
 	cudaEventRecord(start);
 
-	cudaHostAlloc(&input,size,cudaHostAllocDefault);
 	CHECK_CUDA_ERROR(cudaMalloc((void**)&gpu_input, size));
 	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, size, cudaMemcpyHostToDevice));
 
 	dim3 block(32, 32);
-	dim3 grid((cols + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
+	dim3 grid(((cols) + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
 	if(sm){
 		k_init_LUT << <4, 64 >> > (gamma);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
@@ -72,7 +67,7 @@ float gamma_correction_gpu_3D(cv::Mat input_img, cv::Mat* output_img, float gamm
 		k_3D_gamma_correction << <grid, block >> > (gpu_input, rows, cols);
 	}
 
-	CHECK_CUDA_ERROR(cudaMemcpy(input, gpu_input, size, cudaMemcpyDeviceToHost));
+	CHECK_CUDA_ERROR(cudaMemcpy(output, gpu_input, size, cudaMemcpyDeviceToHost));
 
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);
