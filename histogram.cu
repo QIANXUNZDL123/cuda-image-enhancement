@@ -22,38 +22,44 @@ __device__ float dev_normalized_histogram_blue[256] = {0};
 __device__ float dev_cdf_blue[256] = {0};
 __device__ int dev_equalization_values_blue[256] = {0};
 
-__global__ void k_1D_extract_histogram(unsigned char* input, int pixels) {
+__global__ void k_1D_extract_histogram(unsigned char* input, int data_size, int thread_load) {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 	
-	if (threadId >= pixels) {
+	if (threadId >= data_size) {
 		return;
 	}
-	atomicAdd(&dev_histogram[input[threadId]], 1);
+
+	for(int i = 0 ; i < thread_load; i++){
+		atomicAdd(&dev_histogram[input[threadId + i]], 1);
+	}
 }
 
-__global__ void k_1D_extract_histogram_shared_mem(unsigned char* input, int pixels) { /*initialize histogram array*/
+__global__ void k_1D_extract_histogram_shared_mem(unsigned char* input, int data_size, int thread_load) {
 	__shared__ unsigned int cache[256];
 
-	int threadIdInBlock = (threadIdx.x * blockDim.y) + threadIdx.y;
+	int thread_id_in_block = (threadIdx.x * blockDim.y) + threadIdx.y;
 
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 
-	if (threadId >= pixels) {
+	if (threadId >= data_size) {
 		return;
 	}
 
-	if (threadIdInBlock < 256) {
-		cache[threadIdInBlock] = 0;
+	if (thread_id_in_block < 256) {
+		cache[thread_id_in_block] = 0;
 	}
 	__syncthreads();
 
-	atomicAdd(&cache[(input[threadId])], 1);
+	for(int i = 0 ; i < thread_load; i++){
+		int idx = threadId + i;
+		atomicAdd(&cache[(input[idx])], 1);
+	}
 	__syncthreads();
 
-	if (threadIdInBlock < 256) {
-		atomicAdd(&dev_histogram[threadIdInBlock], cache[threadIdInBlock]); /*there is no race condition in block threads. exits for threads in different blocks*/
+	if (thread_id_in_block < 256) {
+		atomicAdd(&dev_histogram[thread_id_in_block], cache[thread_id_in_block]);
 	}
 }
 
@@ -86,60 +92,70 @@ __global__ void k_1D_normalize_cdf_equalization_shared_mem(int pixels) {
 	dev_equalization_values[threadId] = int((cache_cdf[threadId] * 255.0f) + 0.5f);
 }
 
-__global__ void k_1D_histogram_equalization(unsigned char* input, int pixels) {
+__global__ void k_1D_histogram_equalization(unsigned char* input, int pixels, int thread_load) {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 
 	if (threadId >= pixels) {
 		return;
 	}
 
-	input[threadId] = static_cast<uchar>(dev_equalization_values[input[threadId]]);
+	for(int i = 0; i < thread_load; i++){
+		input[threadId + i] = static_cast<uchar>(dev_equalization_values[input[threadId + i]]);
+	}
 }
 
-__global__ void k_1D_histogram_equalization_shared_mem(unsigned char* input, int pixels) {
+__global__ void k_1D_histogram_equalization_shared_mem(unsigned char* input, int pixels, int thread_load) { /*load the cache before threadId control*/
 	__shared__ int cache_equalization_values[256];
 	
 	int thread_id_in_block = (threadIdx.x * blockDim.y) + threadIdx.y;
 
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
+
+	if(thread_id_in_block < 256){
+		cache_equalization_values[thread_id_in_block] = dev_equalization_values[thread_id_in_block];
+	}
 
 	if (threadId >= pixels) {
 		return;
 	}
-	if(thread_id_in_block < 256){
-		cache_equalization_values[thread_id_in_block] = dev_equalization_values[thread_id_in_block];
-	}
+
 	__syncthreads();
-	input[threadId] = static_cast<uchar>(cache_equalization_values[input[threadId]]);
+	for(int i = 0 ; i < thread_load; i++){
+		input[threadId + i] = static_cast<uchar>(cache_equalization_values[input[threadId + i]]);
+	}
 }
 
 
-__global__ void k_3D_extract_histogram(unsigned char* input, int rows, int cols) {
+__global__ void k_3D_extract_histogram(unsigned char* input, int pixels, int thread_load) {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x); 
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load; 
 	
-	if (threadId >= rows * cols) {
+	if (threadId >= pixels) {
 		return;
 	}
-	switch (threadId % 3)
-	{
-	case 0:
-		atomicAdd(&dev_histogram_red[input[threadId]], 1);
-		break;
-	case 1:
-		atomicAdd(&dev_histogram_green[input[threadId]], 1);
-		break;
-	case 2:
-		atomicAdd(&dev_histogram_blue[input[threadId]], 1);
-		break;
-	default:
-		break;
+
+	for(int i = 0; i < thread_load; i++){
+		int idx = threadId + i;
+		switch (idx % 3)
+		{
+		case 0:
+			atomicAdd(&dev_histogram_red[input[idx]], 1);
+			break;
+		case 1:
+			atomicAdd(&dev_histogram_green[input[idx]], 1);
+			break;
+		case 2:
+			atomicAdd(&dev_histogram_blue[input[idx]], 1);
+			break;
+		default:
+			break;
+		}
 	}
 }
 
-__global__ void k_3D_extract_histogram_shared_mem(unsigned char* input, int rows, int cols) {
+__global__ void k_3D_extract_histogram_shared_mem(unsigned char* input, int channels, int thread_load) {
 	__shared__ unsigned int cache_histogram_red[256];
 	__shared__ unsigned int cache_histogram_green[256];
 	__shared__ unsigned int cache_histogram_blue[256];
@@ -147,11 +163,7 @@ __global__ void k_3D_extract_histogram_shared_mem(unsigned char* input, int rows
 	int threadIdInBlock = (threadIdx.x * blockDim.y) + threadIdx.y;
 
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
-
-	if (threadId >= rows * cols) {
-		return;
-	}
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 
 	if (threadIdInBlock < 256) {
 		cache_histogram_red[threadIdInBlock] = 0;
@@ -159,19 +171,25 @@ __global__ void k_3D_extract_histogram_shared_mem(unsigned char* input, int rows
 		cache_histogram_blue[threadIdInBlock] = 0;
 	}
 	__syncthreads();
+	if (threadId >= channels) {
+		return;
+	}
 
-	switch (threadId % 3)
-	{
-	case 0:
-		atomicAdd(&cache_histogram_red[(input[threadId])], 1);
-		break;
-	case 1:
-		atomicAdd(&cache_histogram_green[(input[threadId])], 1);
-		break;
-	case 2:
-		atomicAdd(&cache_histogram_blue[(input[threadId])], 1);
-	default:
-		break;
+	for(int i = 0 ; i < thread_load ; i++){
+		int idx = threadId + i;
+		switch (idx % 3)
+		{
+		case 0:
+			atomicAdd(&cache_histogram_red[(input[idx])], 1);
+			break;
+		case 1:
+			atomicAdd(&cache_histogram_green[(input[idx])], 1);
+			break;
+		case 2:
+			atomicAdd(&cache_histogram_blue[(input[idx])], 1);
+		default:
+			break;
+		}
 	}
 	__syncthreads();
 
@@ -237,64 +255,70 @@ __global__ void k_3D_normalize_cdf_equalization_shared_mem(int pixels) { /*1,256
 	dev_equalization_values_blue[threadId] = int((cache_cdf_blue[threadId] * 255.0f) + 0.5f);
 }
 
-__global__ void k_3D_histogram_equalization(unsigned char* input, int rows , int cols) {
+__global__ void k_3D_histogram_equalization(unsigned char* input, int channels, int thread_load) {
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 
-	if (threadId >= rows * cols) {
+	if (threadId >= channels) {
 		return;
 	}
 
-	switch (threadId % 3)
-	{
-	case 0:
-		input[threadId] = static_cast<uchar>(dev_equalization_values_red[input[threadId]]);
-		break;
-	case 1:
-		input[threadId] = static_cast<uchar>(dev_equalization_values_green[input[threadId]]);
-		break;
-	case 2:
-		input[threadId] = static_cast<uchar>(dev_equalization_values_blue[input[threadId]]);
-		break;
-	default:
-		break;
+	for(int i = 0; i < thread_load; i++){
+		int idx = threadId + i;
+		switch (idx % 3)
+		{
+		case 0:
+			input[idx] = static_cast<uchar>(dev_equalization_values_red[input[idx]]);
+			break;
+		case 1:
+			input[idx] = static_cast<uchar>(dev_equalization_values_green[input[idx]]);
+			break;
+		case 2:
+			input[idx] = static_cast<uchar>(dev_equalization_values_blue[input[idx]]);
+			break;
+		default:
+			break;
+		}
 	}
 }
 
-__global__ void k_3D_histogram_equalization_shared_mem(unsigned char* input, int rows, int cols) {
-	__shared__ int cache_equalization_values_red[256];
-	__shared__ int cache_equalization_values_green[256];
-	__shared__ int cache_equalization_values_blue[256];
+__global__ void k_3D_histogram_equalization_shared_mem(unsigned char* input, int channels, int thread_load) {
+	__shared__ int cache_equalization_values_red[256 + 2];
+	__shared__ int cache_equalization_values_green[256 + 2];
+	__shared__ int cache_equalization_values_blue[256 + 2];
 	
 	int thread_id_in_block = (threadIdx.x * blockDim.y) + threadIdx.y;
 
 	int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x);
+	int threadId = (blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x) * thread_load;
 
-	if (threadId >= rows * cols) {
+	if (thread_id_in_block < 256) {
+		cache_equalization_values_red[thread_id_in_block + 1] = dev_equalization_values_red[thread_id_in_block];
+		cache_equalization_values_green[thread_id_in_block + 1] = dev_equalization_values_green[thread_id_in_block];
+		cache_equalization_values_blue[thread_id_in_block + 1] = dev_equalization_values_blue[thread_id_in_block];
+	}
+
+	if (threadId >= channels) {
 		return;
 	}
-	
-	if (thread_id_in_block < 256) {
-		cache_equalization_values_red[thread_id_in_block] = dev_equalization_values_red[thread_id_in_block];
-		cache_equalization_values_green[thread_id_in_block] = dev_equalization_values_green[thread_id_in_block];
-		cache_equalization_values_blue[thread_id_in_block] = dev_equalization_values_blue[thread_id_in_block];
-	}
 	__syncthreads();
-	switch (threadId % 3)
-	{
-	case 0:
-		input[threadId] = static_cast<uchar>(cache_equalization_values_red[input[threadId]]);
-		break;
-	case 1:
-		input[threadId] = static_cast<uchar>(cache_equalization_values_green[input[threadId]]);
-		break;
-	case 2:
-		input[threadId] = static_cast<uchar>(cache_equalization_values_blue[input[threadId]]);
-		break;
-	
-	default:
-		break;
+	for(int i = 0 ; i < thread_load; i++){
+		int idx = threadId + i;
+		switch (idx % 3)
+		{
+		case 0:
+			input[idx] = static_cast<uchar>(cache_equalization_values_red[input[idx] + 1]);
+			break;
+		case 1:
+			input[idx] = static_cast<uchar>(cache_equalization_values_green[input[idx] + 1]);
+			break;
+		case 2:
+			input[idx] = static_cast<uchar>(cache_equalization_values_blue[input[idx] + 1]);
+			break;
+		
+		default:
+			break;
+		}
 	}
 }
 
@@ -304,10 +328,15 @@ float histogram_equalization_gpu_3D(cv::Mat input_img, cv::Mat* output_img, bool
 	unsigned char* input = input_img.data;
 	unsigned char* output = output_img->data;
 
-	unsigned int cols = input_img.cols * 3;
+	unsigned int thread_load = 9;
+	unsigned int cols = input_img.cols;
+	unsigned int true_cols = cols * 3;
 	unsigned int rows = input_img.rows;
-	unsigned int pixels = input_img.cols * input_img.rows;
-	unsigned long int size = rows * cols * sizeof(unsigned char);
+
+	unsigned int pixels = cols * rows;
+	unsigned int channels = pixels * 3;
+	
+	unsigned long int size = cols * rows * sizeof(unsigned char) * 3;
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -319,24 +348,24 @@ float histogram_equalization_gpu_3D(cv::Mat input_img, cv::Mat* output_img, bool
 	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, size, cudaMemcpyHostToDevice));
 
 	dim3 block(32, 32);
-	dim3 grid((cols + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
+	dim3 grid((true_cols / thread_load + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
 
 	if(sm){
-		k_3D_extract_histogram_shared_mem << <grid, block >> > (gpu_input, rows, cols);
+		k_3D_extract_histogram_shared_mem << <grid, block >> > (gpu_input, channels, thread_load);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
 		k_3D_normalize_cdf_equalization_shared_mem << <1, 256 >> > (pixels);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
-		k_3D_histogram_equalization_shared_mem << <grid, block >> > (gpu_input, rows, cols);
+		k_3D_histogram_equalization_shared_mem << <grid, block >> > (gpu_input, channels, thread_load);
 	}else{
-		k_3D_extract_histogram << <grid, block >> > (gpu_input, rows, cols);
+		k_3D_extract_histogram << <grid, block >> > (gpu_input, channels, thread_load);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
 		k_3D_normalize_cdf_equalization<< <1, 256 >> > (pixels);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
-		k_3D_histogram_equalization<< <grid, block >> > (gpu_input, rows, cols);
+		k_3D_histogram_equalization<< <grid, block >> > (gpu_input, channels, thread_load);
 	}
 	
 	CHECK_CUDA_ERROR(cudaMemcpy(output, gpu_input, size, cudaMemcpyDeviceToHost));
@@ -352,16 +381,18 @@ float histogram_equalization_gpu_3D(cv::Mat input_img, cv::Mat* output_img, bool
 	return gpuElapsedTime;
 }
 
-float histogram_equalization_gpu_1D(cv::Mat inputImg, cv::Mat* outputImg, bool sm) {
+float histogram_equalization_gpu_1D(cv::Mat input_img, cv::Mat* output_img, bool sm) {
 	unsigned char* gpu_input = nullptr;
 
-	unsigned char* input = inputImg.data;
-	unsigned char* output = outputImg->data;
+	unsigned char* input = input_img.data;
+	unsigned char* output = output_img->data;
 
-	unsigned int cols = inputImg.cols;
-	unsigned int rows = inputImg.rows;
-	unsigned int pixels = cols * rows;
-	unsigned long int size = pixels * sizeof(unsigned char); /*Single channel image.*/
+	int thread_load = 9;
+	unsigned int cols = input_img.cols;
+	unsigned int rows = input_img.rows;
+
+	unsigned int pixels = input_img.cols * input_img.rows;
+	unsigned long int data_size = pixels * sizeof(unsigned char);
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -369,33 +400,31 @@ float histogram_equalization_gpu_1D(cv::Mat inputImg, cv::Mat* outputImg, bool s
 
 	cudaEventRecord(start);
 
-	CHECK_CUDA_ERROR(cudaMalloc((unsigned char**)&gpu_input, size));
-	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, size, cudaMemcpyHostToDevice));
-
-	cudaStreamSynchronize(0);
+	CHECK_CUDA_ERROR(cudaMalloc((unsigned char**)&gpu_input, data_size));
+	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, data_size, cudaMemcpyHostToDevice));
 
 	dim3 block(32, 32);
-	dim3 grid((cols + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
+	dim3 grid((cols / thread_load + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
 
 	if(sm){
-		k_1D_extract_histogram_shared_mem << <grid, block >> > (gpu_input, pixels);
+		k_1D_extract_histogram_shared_mem << <grid, block >> > (gpu_input, pixels, thread_load);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
 		k_1D_normalize_cdf_equalization_shared_mem << <1, 256 >> > (pixels);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
-		k_1D_histogram_equalization_shared_mem << <grid, block >> > (gpu_input, pixels);
+		k_1D_histogram_equalization_shared_mem << <grid, block >> > (gpu_input, pixels, thread_load);
 	}else{
-		k_1D_extract_histogram << <grid, block >> > (gpu_input, pixels);
+		k_1D_extract_histogram << <grid, block >> > (gpu_input, pixels, thread_load);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
 		k_1D_normalize_cdf_equalization << <1, 256 >> > (pixels);
 		CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
-		k_1D_histogram_equalization<< <grid, block >> > (gpu_input, pixels);
+		k_1D_histogram_equalization<< <grid, block >> > (gpu_input, pixels, thread_load);
 	}
 	
-	CHECK_CUDA_ERROR(cudaMemcpy(output, gpu_input, size, cudaMemcpyDeviceToHost));
+	CHECK_CUDA_ERROR(cudaMemcpy(output, gpu_input, data_size, cudaMemcpyDeviceToHost));
 
 	cudaEventRecord(stop);
 	cudaEventSynchronize(stop);

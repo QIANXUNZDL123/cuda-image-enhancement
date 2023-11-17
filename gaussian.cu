@@ -2,89 +2,106 @@
 
 constexpr int GAUSSIAN_FILTER_SIZE = 3;
 
-__global__ void k_1D_gaussian_filter(unsigned char *input, int rows, int cols, int mask_dim)
+__global__ void k_1D_gaussian_filter(unsigned char *input, int rows, int cols, int mask_dim, int thread_load, int channels)
 {
-	int ty = blockIdx.x * blockDim.x + threadIdx.x;
-	int tx = blockIdx.y * blockDim.y + threadIdx.y;
+	int ty = (blockIdx.x * blockDim.x + threadIdx.x) * thread_load;
+	int tx = (blockIdx.y * blockDim.y + threadIdx.y);
 
-	int threadId = tx * cols + ty;
+	int threadId = (tx * cols + ty);
 	
 	int offset = GAUSSIAN_FILTER_SIZE / 2;
-	int newPixelValue = 0;
 
-
-	if(threadId >= rows * cols){
+	if(threadId >= channels){
 		return;
 	}
 
 	int conv_kernel[GAUSSIAN_FILTER_SIZE][GAUSSIAN_FILTER_SIZE] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
 
-	for (int r = 0; r < mask_dim; r++)
-	{
-		for (int c = 0; c < mask_dim; c++)
+	for(int i = 0; i < thread_load; i++){
+		int newPixelValue = 0;
+		int _tx = tx;
+		int _ty = ty + i;
+		for (int r = 0; r < mask_dim; r++)
 		{
-			if ((tx > 0 && tx < rows - 1) && (ty > 0 && ty < cols - 1))
+			for (int c = 0; c < mask_dim; c++)
 			{
-				newPixelValue += conv_kernel[r][c] * input[(tx - offset + r) * cols + (ty - offset + c)];
-			}
-			else
-			{
-				return;
-			}
-		}
-	}
-
-	input[threadId] = static_cast<uchar>(newPixelValue / 16);
-}
-
-__global__ void k_1D_gaussian_filter_shared_mem(unsigned char* input, int rows, int cols, int mask_dim)
-{
-	__shared__ unsigned char cache[32][33];
-
-	int conv_kernel[GAUSSIAN_FILTER_SIZE][GAUSSIAN_FILTER_SIZE] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
-
-	int ty = blockIdx.x * blockDim.x + threadIdx.x;
-	int tx = blockIdx.y * blockDim.y + threadIdx.y;
-	int threadId = tx * cols + ty;
-
-	int offset = GAUSSIAN_FILTER_SIZE / 2;
-	int newPixelValue = 0;
-
-	if (threadId >= rows * cols)
-	{
-		return;
-	}
-
-	unsigned int cy = threadIdx.x;
-	unsigned int cx = threadIdx.y;
-
-	cache[cx][cy] = input[threadId]; /*load data shared mem*/
-	__syncthreads();
-
-	for (int i = 0; i < mask_dim; i++)
-	{
-		for (int j = 0; j < mask_dim; j++)
-		{ /*travel on conv matrix*/
-			if ((tx > 0 && tx < rows - 1) && (ty > 0 && ty < cols - 1))
-			{
-				int x_index = cx - offset + i;
-				int y_index = cy - offset + j;
-				if (cx == 31 || cx == 0 || cy == 0 || cy == 31)
+				if ((_tx > 0 && _tx < rows - 1) && (_ty > 0 && _ty < cols - 1))
 				{
-					newPixelValue += conv_kernel[i][j] * input[(tx - offset + i) * cols + (ty - offset + j)];
+					newPixelValue += conv_kernel[r][c] * input[(_tx - offset + r) * cols + (_ty - offset + c)];
 				}
 				else
 				{
-					newPixelValue += conv_kernel[i][j] * cache[x_index][y_index];
+					return;
 				}
 			}
-			else
-			{
-				return;
-			}
+		}
+		input[(_tx * cols + _ty)] = static_cast<uchar>(newPixelValue / 16);
+	}
+	
+}
+__global__ void k_1D_gaussian_filter_shared_mem(unsigned char* input, int rows, int cols, int mask_dim, int thread_load, int channels)
+{
+	__shared__  unsigned char cache[32][32 * 3];
+
+	int conv_kernel[GAUSSIAN_FILTER_SIZE][GAUSSIAN_FILTER_SIZE] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
+
+	int ty = (blockIdx.x * blockDim.x + threadIdx.x) * thread_load;
+	int tx = blockIdx.y * blockDim.y + threadIdx.y;
+
+	int threadId = (tx * cols + ty);
+
+	int offset = GAUSSIAN_FILTER_SIZE / 2;
+	
+
+	unsigned int cy = threadIdx.x * thread_load;
+	unsigned int cx = threadIdx.y;
+
+	for(int i = 0 ; i < thread_load; i++){
+		int _ty = ty + i;
+		int _cy = cy + i;
+		if(_ty < cols -1){
+			cache[cx][_cy] = input[tx * cols + _ty];
 		}
 	}
-	input[threadId] = static_cast<uchar>(newPixelValue / 16);
+
+	if (threadId >= channels)
+	{
+		return;
+	}
+	__syncthreads();
+
+	for(int m = 0; m < thread_load; m++){
+		int _tx = tx;
+		int _ty = ty + m;
+		int _cx = cx;
+		int _cy = cy + m;
+
+		int newPixelValue = 0;
+		for (int i = 0; i < mask_dim; i++)
+		{
+			for (int j = 0; j < mask_dim; j++)
+			{ /*travel on conv matrix*/
+				if ((_tx > 0 && _tx < rows - 1) && (_ty > 0 && _ty < cols - 1))
+				{
+					int x_index = _cx - offset + i;
+					int y_index = (_cy - offset + j);
+					if (_cx == 31 || _cx == 0 || _cy == 0 || _cy == 95)
+					{
+						newPixelValue += conv_kernel[i][j] * input[(_tx - offset + i) * cols + (_ty - offset + j)];
+					}
+					else
+					{
+						newPixelValue += conv_kernel[i][j] * cache[x_index][y_index];
+					}
+				}
+				else
+				{
+					return;
+				}
+			}
+		}
+		input[_tx * cols + _ty] = static_cast<uchar>(newPixelValue / 16);
+	}
 }
 
 float gaussian_filter_gpu_3D(cv::Mat input_img, cv::Mat *output_img, bool sm)
@@ -109,7 +126,6 @@ float gaussian_filter_gpu_3D(cv::Mat input_img, cv::Mat *output_img, bool sm)
 
 	cudaEventRecord(start);
 
-	CHECK_CUDA_ERROR(cudaHostRegister(input,size,0));
 	CHECK_CUDA_ERROR(cudaMalloc((unsigned char **)&gpu_input, size));
 	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, size, cudaMemcpyHostToDevice));
 
@@ -239,15 +255,17 @@ float gaussian_filter_gpu_1D(cv::Mat input_img, cv::Mat *output_img, bool sm)
 	unsigned char *input = input_img.data;
 	unsigned char *output = output_img->data;
 
+	int thread_load = 3; /*32 96*/
 	unsigned int cols = input_img.cols;
 	unsigned int rows = input_img.rows;
 	unsigned int pixels = cols * rows;
-	unsigned int size = pixels * sizeof(unsigned char);
+	unsigned int channels = pixels;
+	unsigned int size = channels * sizeof(unsigned char);
 
 	const uint mask_dim = 3;
 
 	dim3 block(32, 32);
-	dim3 grid((cols + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
+	dim3 grid((cols / thread_load + block.x - 1) / block.x, (rows + block.y - 1) / block.y);
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -259,12 +277,13 @@ float gaussian_filter_gpu_1D(cv::Mat input_img, cv::Mat *output_img, bool sm)
 	CHECK_CUDA_ERROR(cudaMemcpy(gpu_input, input, size, cudaMemcpyHostToDevice));
 
 	if(sm){
-		k_1D_gaussian_filter_shared_mem<<<grid, block>>>(gpu_input, rows, cols, mask_dim);
+		k_1D_gaussian_filter_shared_mem<<<grid, block>>>(gpu_input, rows, cols, mask_dim, thread_load, channels);
 	}
 	else{
-		k_1D_gaussian_filter<<<grid, block>>>(gpu_input, rows, cols, mask_dim);
+		k_1D_gaussian_filter<<<grid, block>>>(gpu_input, rows, cols, mask_dim, thread_load, channels);
 	}
-
+	cudaError_t cudaError = cudaGetLastError();cudaGetLastError();
+	std::cerr << "CUDA Error: " << cudaGetErrorString(cudaError) << std::endl;
 	CHECK_CUDA_ERROR(cudaMemcpy(output, gpu_input, size, cudaMemcpyDeviceToHost));
 
 	cudaEventRecord(stop);
